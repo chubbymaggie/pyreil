@@ -553,12 +553,12 @@ def _set_memory(ctx, i, opnd, value):
     ctx.emit(  stm_  (value, address))
 
 
-def set(ctx, i, index, value, clear=False, sign_extend=False):
+def set(ctx, i, index, value, clear=False, sign_extend=False, full_register=False):
 
     opnd = i.operands[index]
 
     if opnd.type == capstone.x86.X86_OP_REG:
-        return _set_register(ctx, i, opnd, value, clear, sign_extend)
+        return _set_register(ctx, i, opnd, value, clear, sign_extend, full_register)
 
     elif opnd.type == capstone.x86.X86_OP_MEM:
         return _set_memory(ctx, i, opnd, value)

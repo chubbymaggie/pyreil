@@ -27,9 +27,9 @@ the streaming-simd extensions
 import capstone
 
 import reil.native as native
-import reil.definitions as reil
 from reil.shorthand import *
 
+import reil.x86.ascii as ascii
 import reil.x86.arithmetic as arithmetic
 import reil.x86.bitwise as bitwise
 import reil.x86.control_flow as control_flow
@@ -37,26 +37,46 @@ import reil.x86.logic as logic
 import reil.x86.memory as memory
 import reil.x86.misc as misc
 import reil.x86.sse as sse
-
+import reil.x86.unsupported as unsupported
 
 opcode_handlers = {
 
+    capstone.x86.X86_INS_AAA:       ascii.x86_aaa,
+    capstone.x86.X86_INS_AAD:       ascii.x86_aad,
+    capstone.x86.X86_INS_AAS:       ascii.x86_aas,
     capstone.x86.X86_INS_ADC:       arithmetic.x86_adc,
     capstone.x86.X86_INS_ADD:       arithmetic.x86_add,
+    capstone.x86.X86_INS_ADDPD:     unsupported.floating_point,
+    capstone.x86.X86_INS_ADDPS:     unsupported.floating_point,
+    capstone.x86.X86_INS_ADDSD:     unsupported.floating_point,
+    capstone.x86.X86_INS_ADDSS:     unsupported.floating_point,
+    capstone.x86.X86_INS_ADDSUBPD:  unsupported.floating_point,
+    capstone.x86.X86_INS_ADDSUBPS:  unsupported.floating_point,
     capstone.x86.X86_INS_AND:       logic.x86_and,
-    capstone.x86.X86_INS_BSWAP:     misc.x86_bswap,
+    capstone.x86.X86_INS_ANDPD:     unsupported.floating_point,
+    capstone.x86.X86_INS_ANDPS:     unsupported.floating_point,
+    capstone.x86.X86_INS_ANDNPD:    unsupported.floating_point,
+    capstone.x86.X86_INS_ANDNPS:    unsupported.floating_point,
+    capstone.x86.X86_INS_ARPL:      misc.x86_arpl,
+
+    capstone.x86.X86_INS_BOUND:     unsupported.requires_exceptions,
     capstone.x86.X86_INS_BSF:       bitwise.x86_bsf,
     capstone.x86.X86_INS_BSR:       bitwise.x86_bsr,
+    capstone.x86.X86_INS_BSWAP:     misc.x86_bswap,
     capstone.x86.X86_INS_BT:        bitwise.x86_bt,
+    capstone.x86.X86_INS_BTC:       bitwise.x86_btc,
+    capstone.x86.X86_INS_BTR:       bitwise.x86_btr,
+    capstone.x86.X86_INS_BTS:       bitwise.x86_bts,
 
+    capstone.x86.X86_INS_CALL:      control_flow.x86_call,
     capstone.x86.X86_INS_CBW:       misc.x86_cbw,
-    capstone.x86.X86_INS_CLD:       misc.x86_cld,
-    capstone.x86.X86_INS_CWD:       misc.x86_cwd,
-    capstone.x86.X86_INS_CWDE:      misc.x86_cwde,
-    capstone.x86.X86_INS_CDQ:       misc.x86_cdq,
-    capstone.x86.X86_INS_CDQE:      misc.x86_cdqe,
     capstone.x86.X86_INS_CQO:       misc.x86_cqo,
-
+    capstone.x86.X86_INS_CLC:       misc.x86_clc,
+    capstone.x86.X86_INS_CLD:       misc.x86_cld,
+    capstone.x86.X86_INS_CLFLUSH:   unsupported.low_level,
+    capstone.x86.X86_INS_CLI:       unsupported.privileged,
+    capstone.x86.X86_INS_CLTS:      unsupported.privileged,
+    capstone.x86.X86_INS_CMC:       misc.x86_cmc,
     capstone.x86.X86_INS_CMOVA:     memory.x86_cmova,
     capstone.x86.X86_INS_CMOVAE:    memory.x86_cmovae,
     capstone.x86.X86_INS_CMOVB:     memory.x86_cmovb,
@@ -73,16 +93,58 @@ opcode_handlers = {
     capstone.x86.X86_INS_CMOVO:     memory.x86_cmovo,
     capstone.x86.X86_INS_CMOVP:     memory.x86_cmovp,
     capstone.x86.X86_INS_CMOVS:     memory.x86_cmovs,
-
+    capstone.x86.X86_INS_CMP:       arithmetic.x86_cmp,
+    capstone.x86.X86_INS_CMPPD:     unsupported.floating_point,
+    capstone.x86.X86_INS_CMPPS:     unsupported.floating_point,
     capstone.x86.X86_INS_CMPSB:     memory.x86_cmpsb,
     capstone.x86.X86_INS_CMPSW:     memory.x86_cmpsw,
     capstone.x86.X86_INS_CMPSD:     memory.x86_cmpsd,
     capstone.x86.X86_INS_CMPSQ:     memory.x86_cmpsq,
+
+    # TODO: figure out what is happening with capstone interpretation for the
+    # CMPSD xmmx, xmmy, i instructions
+    # ie CMPEQSD xmm0, xmm1
+    # and CMPSS instructions.
+
     capstone.x86.X86_INS_CMPXCHG:   misc.x86_cmpxchg,
-    capstone.x86.X86_INS_CALL:      control_flow.x86_call,
-    capstone.x86.X86_INS_CMP:       arithmetic.x86_cmp,
-    capstone.x86.X86_INS_DIV:       arithmetic.x86_div,
+    capstone.x86.X86_INS_CMPXCHG8B: misc.x86_cmpxchg8b,
+    capstone.x86.X86_INS_COMISD:    unsupported.floating_point,
+    capstone.x86.X86_INS_COMISS:    unsupported.floating_point,
+    capstone.x86.X86_INS_CPUID:     misc.x86_cpuid,
+    capstone.x86.X86_INS_CVTDQ2PD:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTDQ2PS:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTPD2DQ:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTPD2PI:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTPD2PS:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTPI2PD:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTPI2PS:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTPS2DQ:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTPS2PD:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTPS2PI:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTSD2SI:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTSD2SS:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTSI2SD:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTSI2SS:  unsupported.floating_point,
+    capstone.x86.X86_INS_CVTTPD2PI: unsupported.floating_point,
+    capstone.x86.X86_INS_CVTTPD2DQ: unsupported.floating_point,
+    capstone.x86.X86_INS_CVTTPS2DQ: unsupported.floating_point,
+    capstone.x86.X86_INS_CVTTPS2PI: unsupported.floating_point,
+    capstone.x86.X86_INS_CVTTSD2SI: unsupported.floating_point,
+    capstone.x86.X86_INS_CVTTSS2SI: unsupported.floating_point,
+    capstone.x86.X86_INS_CWD:       misc.x86_cwd,
+    capstone.x86.X86_INS_CWDE:      misc.x86_cwde,
+    capstone.x86.X86_INS_CDQ:       misc.x86_cdq,
+    capstone.x86.X86_INS_CDQE:      misc.x86_cdqe,
+
+    capstone.x86.X86_INS_DAA:       ascii.x86_daa,
+    capstone.x86.X86_INS_DAS:       ascii.x86_das,
     capstone.x86.X86_INS_DEC:       arithmetic.x86_dec,
+    capstone.x86.X86_INS_DIV:       arithmetic.x86_div,
+    capstone.x86.X86_INS_DIVPD:     unsupported.floating_point,
+    capstone.x86.X86_INS_DIVPS:     unsupported.floating_point,
+    capstone.x86.X86_INS_DIVSD:     unsupported.floating_point,
+    capstone.x86.X86_INS_DIVSS:     unsupported.floating_point,
+
     capstone.x86.X86_INS_IDIV:      arithmetic.x86_idiv,
     capstone.x86.X86_INS_IMUL:      arithmetic.x86_imul,
     capstone.x86.X86_INS_INC:       arithmetic.x86_inc,

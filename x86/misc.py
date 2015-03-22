@@ -65,6 +65,41 @@ def _convert_2(ctx, size):
     ctx.emit(  str_  (result, ctx.accumulator))
 
 
+def x86_arpl(ctx, i):
+
+    dest_seg = operand.get(ctx, i, 0)
+    src_seg = operand.get(ctx, i, 1)
+
+    dest_rpl = ctx.tmp(16)
+    src_rpl = ctx.tmp(16)
+    tmp0 = ctx.tmp(32)
+    tmp1 = ctx.tmp(8)
+    result_seg = ctx.tmp(16)
+    tmp2 = ctx.tmp(16)
+
+    ctx.emit(  lshr_ (dest_seg, imm(14, 8), dest_rpl))
+    ctx.emit(  lshr_ (src_seg, imm(14, 8), src_rpl))
+
+    ctx.emit(  sub_  (dest_seg, src_seg, tmp0))
+    ctx.emit(  and_  (tmp0, imm(sign_bit(32), 32), tmp0))
+    ctx.emit(  bisz_ (tmp0, tmp1))
+    ctx.emit(  jcc_  ('check_passed'))
+    ctx.emit(  str_  (imm(1, 8), r('zf', 8)))
+    ctx.emit(  and_  (dest_seg, imm(0b0011111111111111, 16), result_seg))
+    ctx.emit(  and_  (src_seg, imm(0b1100000000000000, 16), tmp2))
+    ctx.emit(  or_   (dest_seg, tmp2, dest_seg))
+
+    operand.set(ctx, i, 0, result_seg)
+
+    ctx.emit(  jcc_  (imm(1, 8), 'done'))
+
+    ctx.emit('check_passed')
+    ctx.emit(  str_  (imm(0, 8), r('zf', 8)))
+
+    ctx.emit('done')
+    ctx.emit(  nop_())
+
+
 def x86_bswap(ctx, i):
     a = operand.get(ctx, i, 0)
 
@@ -73,6 +108,10 @@ def x86_bswap(ctx, i):
     value = pack(ctx, bytes)
 
     operand.set(ctx, i, 0, value)
+
+
+def x86_clc(ctx, i):
+    ctx.emit(  str_  (imm(0, 8), r('cf', 8)))
 
 
 def x86_cld(ctx, i):
@@ -103,6 +142,10 @@ def x86_cdqe(ctx, i):
     _convert_2(ctx, 32)
 
 
+def x86_cmc(ctx, i):
+    ctx.emit(  xor_  (r('cf', 8), imm(1, 8), r('cf', 8)))
+
+
 def x86_cmpxchg(ctx, i):
     a = ctx.accumulator
     b = operand.get(ctx, i, 0)
@@ -126,6 +169,73 @@ def x86_cmpxchg(ctx, i):
     ctx.emit('equal')
     operand.set(ctx, i, 0, c)
     ctx.emit(  str_  (imm(1, 8), r('zf', 8)))
+
+    ctx.emit('done')
+    ctx.emit(  nop_())
+
+
+def x86_cmpxchg8b(ctx, i):
+    edx = operand.get_register(ctx, i, 'edx')
+    eax = operand.get_register(ctx, i, 'eax')
+    edx_eax = ctx.tmp(64)
+
+    ecx = operand.get_register(ctx, i, 'ecx')
+    ebx = operand.get_register(ctx, i, 'ebx')
+    ecx_ebx = ctx.tmp(64)
+
+    value = operand.get(ctx, i, 0)
+
+    tmp0 = ctx.tmp(64)
+    tmp1 = ctx.tmp(8)
+
+    result_eax = ctx.tmp(32)
+    result_edx = ctx.tmp(32)
+
+    ctx.emit(  lshl_  (edx, imm(32, 8), edx_eax))
+    ctx.emit(  str_   (eax, tmp0))
+    ctx.emit(  or_    (edx_eax, tmp0, edx_eax))
+
+    ctx.emit(  equ_  (value, edx_eax, tmp1))
+    ctx.emit(  jcc_  (tmp1, 'equal'))
+
+    ctx.emit('not-equal')
+    ctx.emit(  str_  (value, result_eax))
+    ctx.emit(  lshr_ (value, imm(32, 8), value))
+    ctx.emit(  str_  (value, result_edx))
+
+    operand.set_register(ctx, i, 'edx', result_edx)
+    operand.set_register(ctx, i, 'eax', result_eax)
+
+    ctx.emit(  str_  (imm(0, 8), r('zf', 8)))
+    ctx.emit(  jcc_  (imm(1, 8), 'done'))
+
+    ctx.emit('equal')
+    ctx.emit(  lshl_  (ecx, imm(32, 8), ecx_ebx))
+    ctx.emit(  str_   (ebx, tmp0))
+    ctx.emit(  or_    (ecx_ebx, tmp0, ecx_ebx))
+
+    operand.set(ctx, i, 0, ecx_ebx)
+
+    ctx.emit(  str_  (imm(1, 8), r('zf', 8)))
+
+    ctx.emit('done')
+    ctx.emit(  nop_())
+
+
+def x86_cpuid(ctx, i):
+    eax = operand.get_register(ctx, i, 'eax')
+
+    flag = ctx.tmp(8)
+    ctx.emit(  equ_  (eax, imm(0, 32), flag))
+    ctx.emit(  jcc_  (flag, 'cpuid_basic'))
+    ctx.emit(  jcc_  (imm(1, 8), 'done'))
+
+    ctx.emit('cpuid_basic')
+    operand.set_register(ctx, i, 'eax', imm(0, 32))
+    operand.set_register(ctx, i, 'ebx', imm(0x756e6547, 32))
+    operand.set_register(ctx, i, 'ecx', imm(0x49656e69, 32))
+    operand.set_register(ctx, i, 'edx', imm(0x6c65746e, 32))
+    ctx.emit(  jcc_  (imm(1, 8), 'done'))
 
     ctx.emit('done')
     ctx.emit(  nop_())

@@ -29,6 +29,7 @@ import capstone.x86
 import reil
 import reil.error
 from reil.shorthand import *
+from reil.utilities import *
 
 import reil.x86.conditional as conditional
 import reil.x86.operand as operand
@@ -86,12 +87,35 @@ def x86_aad(ctx, i):
     base = imm(10, 8)
 
     result_al = ctx.tmp(8)
-    result_ah = imm(0, 8)
     tmp0 = ctx.tmp(16)
 
     ctx.emit(  mul_  (ah, base, tmp0))
     ctx.emit(  add_  (al, tmp0, tmp0))
     ctx.emit(  str_  (tmp0, result_al))
+
+    set_sf(ctx, result_al)
+    set_zf(ctx, result_al)
+    set_pf(ctx, result_al)
+
+    ctx.emit(  undef_(r('of', 8)))
+    ctx.emit(  undef_(r('af', 8)))
+    ctx.emit(  undef_(r('cf', 8)))
+
+    operand.set_register(ctx, i, 'al', result_al)
+
+
+def x86_aam(ctx, i):
+
+    al = operand.get_register(ctx, i, 'al')
+    ah = operand.get_register(ctx, i, 'ah')
+    base = imm(10, 8)
+
+    result_al = ctx.tmp(8)
+    result_ah = imm(0, 8)
+    tmp0 = ctx.tmp(16)
+
+    ctx.emit(  div_  (al, base, result_ah))
+    ctx.emit(  mod_  (al, tmp0, result_al))
 
     set_sf(ctx, result_al)
     set_zf(ctx, result_al)

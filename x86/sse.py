@@ -30,6 +30,7 @@ import capstone.x86
 
 import reil.error
 from reil.shorthand import *
+from reil.utilities import *
 
 import reil.x86.conditional as conditional
 import reil.x86.memory as memory
@@ -70,6 +71,14 @@ def pack(ctx, parts):
         ctx.emit(  add_  (part, tmp0, value))
 
     return value
+
+
+def vex_opnds(i):
+    if len(i.operands) == 3:
+        # additional VEX operand
+        return 2, 1, 0
+    else:
+        return 0, 1, 0
 
 
 x86_movaps = memory.x86_mov
@@ -139,26 +148,248 @@ def x86_palignr(ctx, i):
     operand.set(ctx, i, 0, result)
 
 
+def x86_pand(ctx, i):
+    a_id, b_id, dst_id = vex_opnds(i)
+
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
+    value = ctx.tmp(a.size)
+
+    ctx.emit(  and_  (a, b, value))
+
+    # TODO: this will clear all the remaining bits of the destination register,
+    # which is incorrect for the legacy sse version. When ymmX register support
+    # is added, this will be broken.
+
+    operand.set(ctx, i, dst_id, value)
+
+
+def x86_pandn(ctx, i):
+    a_id, b_id, dst_id = vex_opnds(i)
+
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
+    value = ctx.tmp(a.size)
+
+    ctx.emit(  xor_  (a, imm(mask(a.size), a.size), value))
+    ctx.emit(  and_  (value, b, value))
+
+    # TODO: this will clear all the remaining bits of the destination register,
+    # which is incorrect for the legacy sse version. When ymmX register support
+    # is added, this will be broken.
+
+    operand.set(ctx, i, dst_id, value)
+
+
+def x86_pcmpeq(ctx, i, size):
+    a_id, b_id, dst_id = vex_opnds(i)
+
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
+
+    a_parts = unpack(ctx, a, size)
+    b_parts = unpack(ctx, b, size)
+
+    dst_parts = []
+    for (a_part, b_part) in zip(a_parts, b_parts):
+        tmp = ctx.tmp(size)
+
+        ctx.emit(  equ_  (a_part, b_part, tmp))
+        ctx.emit(  mul_  (tmp, imm(mask(size), size), tmp))
+
+        dst_parts.append(tmp)
+
+    value = pack(ctx, dst_parts)
+
+    operand.set(ctx, i, dst_id, value)
+
+
 def x86_pcmpeqb(ctx, i):
-    a = operand.get(ctx, i, 0)
-    b = operand.get(ctx, i, 1)
+    x86_pcmpeq(ctx, i, 8)
 
-    a_bytes = unpack(ctx, a, 8)
-    b_bytes = unpack(ctx, b, 8)
 
-    bytes = []
-    for (a_byte, b_byte) in zip(a_bytes, b_bytes):
-        tmp0 = ctx.tmp(8)
-        tmp1 = ctx.tmp(8)
+def x86_pcmpeqd(ctx, i):
+    x86_pcmpeq(ctx, i, 32)
 
-        ctx.emit(  equ_  (a_byte, b_byte, tmp0))
-        ctx.emit(  mul_  (tmp0, imm(0xff, 8), tmp1))
 
-        bytes.append(tmp1)
+def x86_pcmpeqq(ctx, i):
+    x86_pcmpeq(ctx, i, 64)
 
-    value = pack(ctx, bytes)
 
-    operand.set(ctx, i, 0, value)
+def x86_pcmpeqw(ctx, i):
+    x86_pcmpeq(ctx, i, 16)
+
+
+def x86_pcmpgt(ctx, i, size):
+    a_id, b_id, dst_id = vex_opnds(i)
+
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
+
+    a_parts = unpack(ctx, a, size)
+    b_parts = unpack(ctx, b, size)
+
+    a_sign = ctx.tmp(size)
+    a_abs = ctx.tmp(size)
+    b_sign = ctx.tmp(size)
+    b_abs = ctx.tmp(size)
+
+    tmp0 = ctx.tmp(size * 2)
+    a_abs_lt_b_abs = ctx.tmp(8)
+    tmp1 = ctx.tmp(size)
+    a_b_same_sign = ctx.tmp(8)
+    a_neg = ctx.tmp(8)
+    b_nonneg = ctx.tmp(8)
+    a_neg_and_b_nonneg = ctx.tmp(8)
+    cond = ctx.tmp(8)
+
+    dst_parts = []
+    for a_part, b_part in zip(a_parts, b_parts):
+        dst_part = ctx.tmp(size)
+
+        ctx.emit(  and_  (a_part, imm(sign_bit(size), size), a_sign))
+        ctx.emit(  and_  (a_part, imm(~sign_bit(size), size), a_abs))
+        ctx.emit(  and_  (b_part, imm(sign_bit(size), size), b_sign))
+        ctx.emit(  and_  (b_part, imm(~sign_bit(size), size), b_abs))
+
+        # a < b <==> (|a| < |b| and sign(a) == sign(b)) or (a < 0 and b >= 0)
+
+        # |a| < |b|
+        ctx.emit(  sub_  (a_abs, b_abs, tmp0))
+        ctx.emit(  and_  (tmp0, imm(sign_bit(size * 2), size * 2), tmp0))
+        ctx.emit(  bisz_ (tmp0, a_abs_lt_b_abs))
+
+        # sign(a) == sign(b)
+        ctx.emit(  xor_  (a_sign, b_sign, tmp1))
+        ctx.emit(  bisz_ (tmp1, a_b_same_sign))
+
+        # a < 0 and b >= 0
+        ctx.emit(  bisnz_(a_sign, a_neg))
+        ctx.emit(  bisz_ (b_sign, b_nonneg))
+        ctx.emit(  and_  (a_neg, b_nonneg, a_neg_and_b_nonneg))
+
+        ctx.emit(  and_  (a_abs_lt_b_abs, a_b_same_sign, cond))
+        ctx.emit(  or_   (cond, a_neg_and_b_nonneg, cond))
+        ctx.emit(  mul_  (cond, imm(mask(size), size), dst_part))
+
+        dst_parts.append(dst_part)
+
+
+    value = pack(ctx, dst_parts)
+
+    operand.set(ctx, i, dst_id, value)
+
+
+def x86_pcmpgtb(ctx, i):
+    x86_pcmpgt(ctx, i, 8)
+
+
+def x86_pcmpgtd(ctx, i):
+    x86_pcmpgt(ctx, i, 32)
+
+
+def x86_pcmpgtq(ctx, i):
+    x86_pcmpgt(ctx, i, 64)
+
+
+def x86_pcmpgtw(ctx, i):
+    x86_pcmpgt(ctx, i, 16)
+
+
+def x86_pmaxu(ctx, i, size):
+    a_id, b_id, dst_id = vex_opnds(i)
+
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
+
+    a_parts = unpack(ctx, a, size)
+    b_parts = unpack(ctx, b, size)
+
+    tmp0 = ctx.tmp(size * 2)
+    tmp1 = ctx.tmp(size * 2)
+
+    dst_parts = []
+    for a_part, b_part in zip(a_parts, b_parts):
+        dst_part = ctx.tmp(size)
+
+        ctx.emit(  sub_  (a_part, b_part, tmp0))
+        ctx.emit(  and_  (tmp0, imm(sign_bit(size * 2), size * 2), tmp0))
+        ctx.emit(  bisz_ (tmp0, tmp1))
+        ctx.emit(  mul_  (a_part, tmp1, tmp0))
+        ctx.emit(  xor_  (tmp1, imm(1, size * 2), tmp1))
+        ctx.emit(  mul_  (b_part, tmp1, tmp1))
+        ctx.emit(  add_  (tmp0, tmp1, tmp0))
+        ctx.emit(  str_  (tmp0, dst_part))
+
+        dst_parts.append(dst_part)
+
+    value = pack(ctx, dst_parts)
+
+    operand.set(ctx, i, dst_id, value)
+
+
+def x86_pmaxub(ctx, i):
+    x86_pmaxu(ctx, i, 8)
+
+
+def x86_pmaxud(ctx, i):
+    x86_pmaxu(ctx, i, 32)
+
+
+def x86_pmaxuq(ctx, i):
+    x86_pmaxu(ctx, i, 64)
+
+
+def x86_pmaxuw(ctx, i):
+    x86_pmaxu(ctx, i, 16)
+
+
+def x86_pminu(ctx, i, size):
+    a_id, b_id, dst_id = vex_opnds(i)
+
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
+
+    a_parts = unpack(ctx, a, size)
+    b_parts = unpack(ctx, b, size)
+
+    tmp0 = ctx.tmp(size * 2)
+    tmp1 = ctx.tmp(size * 2)
+
+    dst_parts = []
+    for a_part, b_part in zip(a_parts, b_parts):
+        dst_part = ctx.tmp(size)
+
+        ctx.emit(  sub_  (a_part, b_part, tmp0))
+        ctx.emit(  and_  (tmp0, imm(sign_bit(size * 2), size * 2), tmp0))
+        ctx.emit(  bisz_ (tmp0, tmp1))
+        ctx.emit(  mul_  (b_part, tmp1, tmp0))
+        ctx.emit(  xor_  (tmp1, imm(1, size * 2), tmp1))
+        ctx.emit(  mul_  (a_part, tmp1, tmp1))
+        ctx.emit(  add_  (tmp0, tmp1, tmp0))
+        ctx.emit(  str_  (tmp0, dst_part))
+
+        dst_parts.append(dst_part)
+
+    value = pack(ctx, dst_parts)
+
+    operand.set(ctx, i, dst_id, value)
+
+
+def x86_pminub(ctx, i):
+    x86_pminu(ctx, i, 8)
+
+
+def x86_pminud(ctx, i):
+    x86_pminu(ctx, i, 32)
+
+
+def x86_pminuq(ctx, i):
+    x86_pminu(ctx, i, 64)
+
+
+def x86_pminuw(ctx, i):
+    x86_pminu(ctx, i, 16)
 
 
 def x86_pmovmskb(ctx, i):
@@ -186,15 +417,19 @@ def x86_pmovmskb(ctx, i):
 
 
 def x86_por(ctx, i):
-    a = operand.get(ctx, i, 0)
-    b = operand.get(ctx, i, 1)
+    a_id, b_id, dst_id = vex_opnds(i)
 
-    size = min(a.size, b.size)
-    value = ctx.tmp(size)
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
+    value = ctx.tmp(a.size)
 
     ctx.emit(  or_  (a, b, value))
 
-    operand.set(ctx, i, 0, value)
+    # TODO: this will clear all the remaining bits of the destination register,
+    # which is incorrect for the legacy sse version. When ymmX register support
+    # is added, this will be broken.
+
+    operand.set(ctx, i, dst_id, value)
 
 
 def x86_pshufd(ctx, i):
@@ -243,9 +478,24 @@ def x86_pslldq(ctx, i):
     operand.set(ctx, i, 0, result)
 
 
-def _x86_psub(ctx, i, part_size):
+def x86_psrldq(ctx, i):
     a = operand.get(ctx, i, 0)
     b = operand.get(ctx, i, 1)
+    result = ctx.tmp(a.size)
+
+    shift = min(b.value, 16)
+
+    # right shift by the correct amount
+    ctx.emit(  lshr_ (a, imm(shift * 8, 8), result))
+
+    operand.set(ctx, i, 0, result)
+
+
+def _x86_psub(ctx, i, part_size):
+    a_id, b_id, dst_id = vex_opnds(i)
+
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
 
     size = min(a.size, b.size)
     part_count = size // part_size
@@ -264,7 +514,7 @@ def _x86_psub(ctx, i, part_size):
 
     value = pack(ctx, parts)
 
-    operand.set(ctx, i, 0, value)
+    operand.set(ctx, i, dst_id, value)
 
 
 def x86_psubb(ctx, i):
@@ -323,12 +573,16 @@ def x86_punpcklqdq(ctx, i):
 
 
 def x86_pxor(ctx, i):
-    a = operand.get(ctx, i, 0)
-    b = operand.get(ctx, i, 1)
+    a_id, b_id, dst_id = vex_opnds(i)
 
-    size = min(a.size, b.size)
-    value = ctx.tmp(size)
+    a = operand.get(ctx, i, a_id)
+    b = operand.get(ctx, i, b_id)
+    value = ctx.tmp(a.size)
 
     ctx.emit(  xor_  (a, b, value))
 
-    operand.set(ctx, i, 0, value)
+    # TODO: this will clear all the remaining bits of the destination register,
+    # which is incorrect for the legacy sse version. When ymmX register support
+    # is added, this will be broken.
+
+    operand.set(ctx, i, dst_id, value)

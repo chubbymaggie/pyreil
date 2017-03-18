@@ -25,6 +25,7 @@ haven't categorised as anything yet
 
 import reil.error
 from reil.shorthand import *
+from reil.utilities import *
 
 import reil.x86.conditional as conditional
 import reil.x86.operand as operand
@@ -222,6 +223,54 @@ def x86_cmpxchg8b(ctx, i):
     ctx.emit(  nop_())
 
 
+def x86_cmpxchg16b(ctx, i):
+    rdx = operand.get_register(ctx, i, 'rdx')
+    rax = operand.get_register(ctx, i, 'rax')
+    rdx_rax = ctx.tmp(128)
+
+    rcx = operand.get_register(ctx, i, 'rcx')
+    rbx = operand.get_register(ctx, i, 'rbx')
+    rcx_rbx = ctx.tmp(128)
+
+    value = operand.get(ctx, i, 0)
+
+    tmp0 = ctx.tmp(128)
+    tmp1 = ctx.tmp(8)
+
+    result_rax = ctx.tmp(64)
+    result_rdx = ctx.tmp(64)
+
+    ctx.emit(  lshl_  (rdx, imm(64, 8), rdx_rax))
+    ctx.emit(  str_   (rax, tmp0))
+    ctx.emit(  or_    (rdx_rax, tmp0, rdx_rax))
+
+    ctx.emit(  equ_  (value, rdx_rax, tmp1))
+    ctx.emit(  jcc_  (tmp1, 'equal'))
+
+    ctx.emit('not-equal')
+    ctx.emit(  str_  (value, result_rax))
+    ctx.emit(  lshr_ (value, imm(64, 8), value))
+    ctx.emit(  str_  (value, result_rdx))
+
+    operand.set_register(ctx, i, 'rdx', result_rdx)
+    operand.set_register(ctx, i, 'rax', result_rax)
+
+    ctx.emit(  str_  (imm(0, 8), r('zf', 8)))
+    ctx.emit(  jcc_  (imm(1, 8), 'done'))
+
+    ctx.emit('equal')
+    ctx.emit(  lshl_  (rcx, imm(64, 8), rcx_rbx))
+    ctx.emit(  str_   (rbx, tmp0))
+    ctx.emit(  or_    (rcx_rbx, tmp0, rcx_rbx))
+
+    operand.set(ctx, i, 0, rcx_rbx)
+
+    ctx.emit(  str_  (imm(1, 8), r('zf', 8)))
+
+    ctx.emit('done')
+    ctx.emit(  nop_())
+
+
 def x86_cpuid(ctx, i):
     eax = operand.get_register(ctx, i, 'eax')
 
@@ -243,6 +292,44 @@ def x86_cpuid(ctx, i):
 
 def x86_int(ctx, i):
     ctx.emit(  sys_  (imm(0, 8)))
+
+
+def x86_int1(ctx, i):
+    ctx.emit(  sys_  (imm(1, 8)))
+
+
+def x86_int3(ctx, i):
+    ctx.emit(  sys_  (imm(3, 8)))
+
+
+def x86_into(ctx, i):
+    ctx.emit(  jcc_  (r('of', 8), 'do_interrupt'))
+    ctx.emit(  jcc_  (imm(1, 8), 'done'))
+
+    ctx.emit('do_interrupt')
+    ctx.emit(  sys_  (imm(4, 8)))
+
+    ctx.emit('done')
+    ctx.emit(  nop_  ())
+
+
+def x86_lahf(ctx, i):
+    result_ah = ctx.tmp(8)
+
+    ctx.emit(  str_  (imm(0, 8), result_ah))
+    ctx.emit(  or_   (r('sf', 8), result_ah))
+    ctx.emit(  lshl_ (result_ah, imm(1, 8), result_ah))
+    ctx.emit(  or_   (r('zf', 8), result_ah))
+    ctx.emit(  lshl_ (result_ah, imm(2, 8), result_ah))
+    ctx.emit(  or_   (r('af', 8), result_ah))
+    ctx.emit(  lshl_ (result_ah, imm(2, 8), result_ah))
+    ctx.emit(  or_   (r('pf', 8), result_ah))
+    ctx.emit(  lshl_ (result_ah, imm(1, 8), result_ah))
+    ctx.emit(  or_   (imm(1, 8), result_ah))
+    ctx.emit(  lshl_ (result_ah, imm(1, 8), result_ah))
+    ctx.emit(  or_   (r('cf', 8), result_ah))
+
+    operand.set_register(ctx, i, 'ah', result_ah)
 
 
 def x86_nop(ctx, i):

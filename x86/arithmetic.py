@@ -25,6 +25,7 @@ such as add, mul, div
 
 import reil.error
 from reil.shorthand import *
+from reil.utilities import *
 
 import reil.x86.conditional as conditional
 import reil.x86.operand as operand
@@ -137,6 +138,44 @@ def x86_adc(ctx, i):
     ctx.emit(  add_  (result, r('cf', 8), result))
 
     _add_set_flags(ctx, a, b, result)
+
+    operand.set(ctx, i, 0, result)
+
+
+def x86_adcx(ctx, i):
+    a = operand.get(ctx, i, 0)
+    b = operand.get(ctx, i, 1)
+
+    b = _sign_extend(ctx, a, b)
+
+    result = ctx.tmp(a.size * 2)
+    tmp0 = ctx.tmp(a.size * 2)
+
+    ctx.emit(  add_  (a, b, result))
+    ctx.emit(  add_  (result, r('cf', 8), result))
+
+    # only set carry flag
+    ctx.emit(  and_  (result, imm(carry_bit(a.size), result.size), tmp0))
+    ctx.emit(  bisnz_(tmp0, r('cf', 8)))
+
+    operand.set(ctx, i, 0, result)
+
+
+def x86_adox(ctx, i):
+    a = operand.get(ctx, i, 0)
+    b = operand.get(ctx, i, 1)
+
+    b = _sign_extend(ctx, a, b)
+
+    result = ctx.tmp(a.size * 2)
+    tmp0 = ctx.tmp(a.size * 2)
+
+    ctx.emit(  add_  (a, b, result))
+    ctx.emit(  add_  (result, r('of', 8), result))
+
+    # only set carry flag
+    ctx.emit(  and_  (result, imm(carry_bit(a.size), result.size), tmp0))
+    ctx.emit(  bisnz_(tmp0, r('of', 8)))
 
     operand.set(ctx, i, 0, result)
 
@@ -308,16 +347,32 @@ def x86_idiv(ctx, i):
 def x86_imul(ctx, i):
     if len(i.operands) == 1:
         # single operand form
-        a = ctx.accumulator
-        b = ctx.data
+        b = operand.get(ctx, i, 0)
 
-        result = ctx.tmp(a.size * 2)
+        if b.size == 64:
+          a_reg = 'rax'
+          b_reg = 'rdx'
+        elif b.size == 32:
+          a_reg = 'eax'
+          b_reg = 'edx'
+        elif b.size == 16:
+          a_reg = 'ax'
+          b_reg = 'dx'
+        elif b.size == 8:
+          a_reg = 'al'
+          b_reg = 'ah'
+
+        a = operand.get_register(ctx, i, a_reg)
+
+        result = ctx.tmp(b.size * 2)
+        result_value = ctx.tmp(b.size)
 
         ctx.emit(  mul_  (a, b, result))
 
-        ctx.emit(  str_  (result, ctx.accumulator))
-        ctx.emit(  lshr_ (result, imm(a.size, 8), result))
-        ctx.emit(  str_  (result, ctx.data))
+        ctx.emit(  str_  (result, result_value))
+        operand.set_register(ctx, i, a_reg, result_value)
+        ctx.emit(  lshr_ (result, imm(b.size, 8), result_value))
+        operand.set_register(ctx, i, b_reg, result_value)
 
         _imul_set_flags(ctx, result)
 
@@ -429,3 +484,19 @@ def x86_sub(ctx, i):
     _sub_set_flags(ctx, a, b, result)
 
     operand.set(ctx, i, 0, result)
+
+
+def x86_xadd(ctx, i):
+    a = operand.get(ctx, i, 0)
+    b = operand.get(ctx, i, 1)
+
+    b = _sign_extend(ctx, a, b)
+
+    result = ctx.tmp(a.size * 2)
+
+    ctx.emit(  add_  (a, b, result))
+
+    _add_set_flags(ctx, a, b, result)
+
+    operand.set(ctx, i, 0, result)
+    operand.set(ctx, i, 1, a)

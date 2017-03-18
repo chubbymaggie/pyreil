@@ -28,6 +28,7 @@ import capstone
 import reil.error
 from reil import *
 from reil.shorthand import *
+from reil.utilities import *
 
 import reil.x86.arithmetic as arithmetic
 import reil.x86.conditional as conditional
@@ -245,6 +246,54 @@ def x86_leave(ctx, i):
                       ctx.stack_ptr))
 
 
+def x86_lods(ctx, i, size):
+    src = ctx.source
+
+    value = ctx.tmp(size)
+
+    if i.mnemonic.startswith('rep'):
+        rep_prologue(ctx, i)
+
+    ctx.emit(  ldm_  (src, value))
+
+    if size == 8:
+        operand.set_register(ctx, i, 'al', value)
+    elif size == 16:
+        operand.set_register(ctx, i, 'ax', value)
+    elif size == 32:
+        operand.set_register(ctx, i, 'eax', value)
+    else:
+        operand.set_register(ctx, i, 'rax', value)
+
+    ctx.emit(  jcc_  (r('df', 8), 'decrement'))
+    ctx.emit('increment')
+    ctx.emit(  add_  (src, imm(value.size // 8, ctx.word_size), src))
+    ctx.emit(  jcc_  (imm(1, 8), 'set'))
+    ctx.emit('decrement')
+    ctx.emit(  sub_  (src, imm(value.size // 8, ctx.word_size), src))
+    ctx.emit('set')
+    ctx.emit(  str_  (src, ctx.source))
+
+    if i.mnemonic.startswith('rep'):
+        rep_epilogue(ctx, i)
+
+
+def x86_lodsb(ctx, i):
+    x86_lods(ctx, i, 8)
+
+
+def x86_lodsd(ctx, i):
+    x86_lods(ctx, i, 32)
+
+
+def x86_lodsq(ctx, i):
+    x86_lods(ctx, i, 64)
+
+
+def x86_lodsw(ctx, i):
+    x86_lods(ctx, i, 16)
+
+
 def x86_mov(ctx, i):
     size = operand.get_size(ctx, i, 0)
     value = None
@@ -253,6 +302,9 @@ def x86_mov(ctx, i):
     if len(i.operands) == 1:
         # source is the accumulator
         value = ctx.accumulator
+
+        if i.operands[0].type == capstone.x86.X86_OP_REG:
+            clear = False
     else:
         value = operand.get(ctx, i, 1, size=size)
 
@@ -262,9 +314,9 @@ def x86_mov(ctx, i):
 
     # Oh x86 how I hate you
     if i.operands[1].type == capstone.x86.X86_OP_MEM and operand.get_size(ctx, i, 1) != 32:
-        operand.set(ctx, i, 0, value)
-    else:
-        operand.set(ctx, i, 0, value, clear=True, sign_extend=False)
+        clear = False
+
+    operand.set(ctx, i, 0, value, clear=clear)
 
 
 def x86_movabs(ctx, i):
@@ -272,25 +324,32 @@ def x86_movabs(ctx, i):
 
 
 def x86_movs(ctx, i, size):
-    a = ctx.destination
-    b = ctx.source
+    # This is to handle the mnemonic overload (SSE movsd) for 'move scalar
+    # double-precision floating-point value' since capstone doesn't
+    # distinguish. That instruction is just a mov into/from the SSE
+    # registers.
+    if not operand.is_memory(ctx, i, 0) or not operand.is_memory(ctx, i, 1):
+      # so basically, if one of the operands is not a memory address, then we
+      # know that this is the SSE version, which x86_mov can handle.
+      return x86_mov(ctx, i)
 
-    address = ctx.destination
     value = ctx.tmp(size)
 
     if i.mnemonic.startswith('rep'):
         rep_prologue(ctx, i)
 
-    ctx.emit(  ldm_  (b, value))
-    ctx.emit(  stm_  (value, a))
+    ctx.emit(  ldm_  (ctx.source, value))
+    ctx.emit(  stm_  (value, ctx.destination))
     ctx.emit(  jcc_  (r('df', 8), 'decrement'))
     ctx.emit('increment')
-    ctx.emit(  add_  (address, imm(value.size // 8, ctx.word_size), address))
-    ctx.emit(  jcc_  (imm(1, 8), 'set'))
+    ctx.emit(  add_  (ctx.destination, imm(value.size // 8, ctx.word_size), ctx.destination))
+    ctx.emit(  add_  (ctx.source, imm(value.size // 8, ctx.word_size), ctx.source))
+    ctx.emit(  jcc_  (imm(1, 8), 'done'))
     ctx.emit('decrement')
-    ctx.emit(  sub_  (address, imm(value.size // 8, ctx.word_size), address))
-    ctx.emit('set')
-    ctx.emit(  str_  (address, ctx.destination))
+    ctx.emit(  sub_  (ctx.destination, imm(value.size // 8, ctx.word_size), ctx.destination))
+    ctx.emit(  sub_  (ctx.source, imm(value.size // 8, ctx.word_size), ctx.source))
+    ctx.emit('done')
+    ctx.emit(  nop_  ())
 
     if i.mnemonic.startswith('rep'):
         rep_epilogue(ctx, i)

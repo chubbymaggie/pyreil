@@ -27,6 +27,7 @@ import capstone
 
 from reil.error import *
 from reil.shorthand import *
+from reil.utilities import *
 
 from reil.x86.utilities import *
 
@@ -202,6 +203,14 @@ def _get_memory_size(ctx, i, opnd):
 
 
 def _get_register(ctx, i, reg):
+    # we need to handle rip first to shortcut native register handling.
+    if reg == capstone.x86.X86_REG_RIP and not ctx.use_rip:
+        qword_reg = ctx.tmp(64)
+
+        ctx.emit(  str_  (imm(i.address + i.size, 64), qword_reg))
+
+        return qword_reg
+
     # full native registers
     if reg in ctx.registers:
         return ctx.registers[reg]
@@ -305,13 +314,6 @@ def _get_register(ctx, i, reg):
         ctx.emit(  str_  (low_dwords[reg], dword_reg))
 
         return dword_reg
-
-    if reg == capstone.x86.X86_REG_RIP:
-        qword_reg = ctx.tmp(64)
-
-        ctx.emit(  str_  (imm(i.address + i.size, 64), qword_reg))
-
-        return qword_reg
 
     raise TranslationError('Unsupported register!')
 
@@ -567,6 +569,25 @@ def _set_register(ctx, i, reg_id, value, clear=False, sign_extend=False):
         capstone.x86.X86_REG_R15D:r('r15', 64),
     }
 
+    sse_regs = {
+        capstone.x86.X86_REG_XMM0:r('xmm0', 128),
+        capstone.x86.X86_REG_XMM1:r('xmm1', 128),
+        capstone.x86.X86_REG_XMM2:r('xmm2', 128),
+        capstone.x86.X86_REG_XMM3:r('xmm3', 128),
+        capstone.x86.X86_REG_XMM4:r('xmm4', 128),
+        capstone.x86.X86_REG_XMM5:r('xmm5', 128),
+        capstone.x86.X86_REG_XMM6:r('xmm6', 128),
+        capstone.x86.X86_REG_XMM7:r('xmm7', 128),
+        capstone.x86.X86_REG_XMM8:r('xmm8', 128),
+        capstone.x86.X86_REG_XMM9:r('xmm9', 128),
+        capstone.x86.X86_REG_XMM10:r('xmm10', 128),
+        capstone.x86.X86_REG_XMM11:r('xmm11', 128),
+        capstone.x86.X86_REG_XMM12:r('xmm12', 128),
+        capstone.x86.X86_REG_XMM13:r('xmm13', 128),
+        capstone.x86.X86_REG_XMM14:r('xmm14', 128),
+        capstone.x86.X86_REG_XMM15:r('xmm15', 128),
+    }
+
     def truncate_value(value, size):
 
         if value.size > size:
@@ -610,12 +631,25 @@ def _set_register(ctx, i, reg_id, value, clear=False, sign_extend=False):
 
     # 32-bit low parts
     elif reg_id in low_dwords:
+        # NB: this code is only reached in x86_64 mode.
+
+        # CF: Intel Manual... 32-bit operands generate a 32-bit result,
+        # zero-extended to a 64-bit result in the destination register.
+
         reg = low_dwords[reg_id]
-        set_mask = imm(~mask(32), reg.size)
+        set_mask = imm(mask(64), reg.size)
         value = truncate_value(value, 32)
+        clear = True
 
     else:
         raise TranslationError('Unsupported register!')
+
+    if reg_id in sse_regs:
+      # NB: We make the default behaviour for setting a smaller value to an SSE
+      # register to zero-extend. Code in SSE implementation will have to expect
+      # this... But it makes implementation of the memory moves for SSE simpler
+      sign_extend = False
+      clear = True
 
     if value.size > reg.size:
         value = truncate_value(value, reg.size)
@@ -632,8 +666,9 @@ def _set_register(ctx, i, reg_id, value, clear=False, sign_extend=False):
         else:
             tmp0 = ctx.tmp(reg.size)
 
+            ctx.emit(  str_  (prev_value, value))
             ctx.emit(  and_  (reg, set_mask, tmp0))
-            ctx.emit(  or_   (tmp0, prev_value, value))
+            ctx.emit(  or_   (tmp0, value, value))
 
     ctx.emit(  str_  (value, reg))
 
@@ -672,3 +707,109 @@ def set_register(ctx, i, name, value, clear=False, sign_extend=False):
     reg_id = _reg_id_from_name(name)
 
     return _set_register(ctx, i, reg_id, value, clear, sign_extend)
+
+
+def _undef_register(ctx, i, reg_id, clear=False, sign_extend=False):
+
+    low_bytes = {
+        capstone.x86.X86_REG_AL:ctx.accumulator,
+        capstone.x86.X86_REG_BL:ctx.base,
+        capstone.x86.X86_REG_CL:ctx.counter,
+        capstone.x86.X86_REG_DL:ctx.data,
+        capstone.x86.X86_REG_SIL:ctx.source,
+        capstone.x86.X86_REG_DIL:ctx.destination,
+        capstone.x86.X86_REG_BPL:ctx.frame_ptr,
+        capstone.x86.X86_REG_SPL:ctx.stack_ptr,
+        capstone.x86.X86_REG_R8B:r('r8', 64),
+        capstone.x86.X86_REG_R9B:r('r9', 64),
+        capstone.x86.X86_REG_R10B:r('r10', 64),
+        capstone.x86.X86_REG_R11B:r('r11', 64),
+        capstone.x86.X86_REG_R12B:r('r12', 64),
+        capstone.x86.X86_REG_R13B:r('r13', 64),
+        capstone.x86.X86_REG_R14B:r('r14', 64),
+        capstone.x86.X86_REG_R15B:r('r15', 64),
+    }
+
+    high_bytes = {
+        capstone.x86.X86_REG_AH:ctx.accumulator,
+        capstone.x86.X86_REG_BH:ctx.base,
+        capstone.x86.X86_REG_CH:ctx.counter,
+        capstone.x86.X86_REG_DH:ctx.data
+    }
+
+    low_words = {
+        capstone.x86.X86_REG_AX:ctx.accumulator,
+        capstone.x86.X86_REG_BX:ctx.base,
+        capstone.x86.X86_REG_CX:ctx.counter,
+        capstone.x86.X86_REG_DX:ctx.data,
+        capstone.x86.X86_REG_SI:ctx.source,
+        capstone.x86.X86_REG_DI:ctx.destination,
+        capstone.x86.X86_REG_BP:ctx.frame_ptr,
+        capstone.x86.X86_REG_SP:ctx.stack_ptr,
+        capstone.x86.X86_REG_R8W:r('r8', 64),
+        capstone.x86.X86_REG_R9W:r('r9', 64),
+        capstone.x86.X86_REG_R10W:r('r10', 64),
+        capstone.x86.X86_REG_R11W:r('r11', 64),
+        capstone.x86.X86_REG_R12W:r('r12', 64),
+        capstone.x86.X86_REG_R13W:r('r13', 64),
+        capstone.x86.X86_REG_R14W:r('r14', 64),
+        capstone.x86.X86_REG_R15W:r('r15', 64),
+    }
+
+    low_dwords = {
+        capstone.x86.X86_REG_EAX:ctx.accumulator,
+        capstone.x86.X86_REG_EBX:ctx.base,
+        capstone.x86.X86_REG_ECX:ctx.counter,
+        capstone.x86.X86_REG_EDX:ctx.data,
+        capstone.x86.X86_REG_ESI:ctx.source,
+        capstone.x86.X86_REG_EDI:ctx.destination,
+        capstone.x86.X86_REG_EBP:ctx.frame_ptr,
+        capstone.x86.X86_REG_ESP:ctx.stack_ptr,
+        capstone.x86.X86_REG_R8D:r('r8', 64),
+        capstone.x86.X86_REG_R9D:r('r9', 64),
+        capstone.x86.X86_REG_R10D:r('r10', 64),
+        capstone.x86.X86_REG_R11D:r('r11', 64),
+        capstone.x86.X86_REG_R12D:r('r12', 64),
+        capstone.x86.X86_REG_R13D:r('r13', 64),
+        capstone.x86.X86_REG_R14D:r('r14', 64),
+        capstone.x86.X86_REG_R15D:r('r15', 64),
+    }
+
+    # TODO: this is not really correct, since we always explode the whole
+    # register, but we don't really have support for anything else...
+
+    # full native registers
+    if reg_id in ctx.registers:
+        reg = ctx.registers[reg_id]
+
+    # 8-bit low parts
+    elif reg_id in low_bytes:
+        reg = low_bytes[reg_id]
+
+    # 8-bit high parts
+    elif reg_id in high_bytes:
+        reg = high_bytes[reg_id]
+
+    # 16-bit low parts
+    elif reg_id in low_words:
+        reg = low_words[reg_id]
+
+    # 32-bit low parts
+    elif reg_id in low_dwords:
+        reg = low_dwords[reg_id]
+
+    else:
+        raise TranslationError('Unsupported register!')
+
+    ctx.emit(  undef_  (reg))
+
+
+def undefine(ctx, i, index):
+
+    opnd = i.operands[index]
+
+    if opnd.type == capstone.x86.X86_OP_REG:
+        _undef_register(ctx, i, opnd.reg)
+
+    else:
+        raise TranslationError('Can only call operand.undefine on a register operand')

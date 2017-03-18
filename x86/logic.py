@@ -25,6 +25,7 @@ such as and, or, xor
 
 import reil.error
 from reil.shorthand import *
+from reil.utilities import *
 
 import reil.x86.conditional as conditional
 import reil.x86.operand as operand
@@ -71,7 +72,22 @@ def x86_and(ctx, i):
 
     _logic_set_flags(ctx, result)
 
-    operand.set(ctx, i, 0, result, clear=True)
+    operand.set(ctx, i, 0, result)
+
+
+def x86_andn(ctx, i):
+    a = operand.get(ctx, i, 0)
+    b = operand.get(ctx, i, 1, a.size)
+
+    size = min(a.size, b.size)
+    result = ctx.tmp(size)
+
+    ctx.emit(  xor_  (a, imm(mask(size), size), result))
+    ctx.emit(  and_  (result, b, result))
+
+    _logic_set_flags(ctx, result)
+
+    operand.set(ctx, i, 0, result)
 
 
 def x86_not(ctx, i):
@@ -122,4 +138,4 @@ def x86_xor(ctx, i):
 
     _logic_set_flags(ctx, result)
 
-    operand.set(ctx, i, 0, result, clear=True)
+    operand.set(ctx, i, 0, result)
